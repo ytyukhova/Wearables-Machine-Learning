@@ -1,0 +1,133 @@
+---
+title: "Wearables"
+author: "Yulia Tyukhova"
+date: "9/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE,cache=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website [here](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set using any of the other variables to predict with. 
+
+
+## Analysis 
+Loading the data and explore the training data set.
+
+```{r,cache=TRUE}
+training<-read.csv("pml-training.csv",header=TRUE)
+testing<-read.csv("pml-testing.csv",header=TRUE)
+str(training)
+```
+This data set needs to be cleaned up, since it has a number of variables with little variance and many NAs. For example, the number of NAs in the variable "max_roll_belt" is 19216, while the total number of values is 19622.
+```{r,cache=TRUE}
+## Fraction of NAs for every column (displaying just 20 lines)
+head(round(colSums(is.na(training))/nrow(training), 4),20)
+## Fraction of NAs for a particular column
+sum(is.na(training$max_roll_belt))/nrow(training)
+## Reduce columns with little variance, since they are not useful for prediction
+library(caret)
+subtrain<-training[, names(training)[!(nearZeroVar(training, saveMetrics = T)[, 4])]]
+## Identify columns that have NAs
+remove<-names(which(colSums(is.na(subtrain))>0))
+## Keep all other columns
+subtrain<-subtrain[, !(names(subtrain) %in% remove)]
+## The first 6 columns are not useful for predicting the result ("classe")
+subtrain<-subtrain[,7:length(colnames(subtrain))]
+```
+
+Divide cleaned training data ("subtrain") into train (75%) and valid (25%) data sets, so that the performance of the machine learning model can be estimated.
+
+```{r,cache=TRUE}
+inTrain<-createDataPartition(y=subtrain$classe,p=0.75,list=F)
+train<-subtrain[inTrain,]
+valid<-subtrain[-inTrain,]
+```
+
+## Model
+The goal of the project is to predict the manner in which participants exercise, which is defined by the variable "classe". It has 5 factor levels A-E that describe the correctness of the exercise. Please refer to the "Background" section in this document.
+
+The next step is to fit a model. Two models were fit to choose the best performing model.
+
+### Random forests
+Random forests are usually 1 of the top 2 performing algorithms along with boosting in prediction contests. They are difficult to intepret, but very accurate. It is important to avoid overfitting. 
+
+Since the data set is large, approach from the following source was used - [here](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md).
+
+Caret automates the process of fitting multiple versions of a given model by varying its parameters and/or folds within a resampling / cross-validation process (see source above). Other source for estimation of model accuracy in R using the Caret package is [here](https://machinelearningmastery.com/how-to-estimate-model-accuracy-in-r-using-the-caret-package/).
+
+```{r,cache=TRUE}
+set.seed(156)
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+modelfit<-train(classe~.,data=train,preProcess=c("center","scale"),
+                method="rf",trControl = fitControl)
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+Now let's look at the performance of this model.
+
+```{r,cache=TRUE}
+modelfit
+```
+
+Out-of-sample-error - the error rate you get on a new data set ("valid"). 
+
+```{r,cache=TRUE}
+predictions<-predict(modelfit,newdata=valid)
+confusionMatrix(predictions,valid$classe)
+```
+**Accuracy is 0.9949.**
+
+### Boosting 
+
+The other model to test is the generalized boosted regression model.
+
+```{r,cache=TRUE}
+set.seed(203)
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl2<-trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+modelfit2<-train(classe~.,data=train,method="gbm",verbose=F,
+                 trControl = fitControl2)
+stopCluster(cluster)
+registerDoSEQ()
+
+modelfit2
+modelfit2$finalModel
+
+predictions2<-predict(modelfit2,newdata=valid)
+confusionMatrix(predictions2,valid$classe)
+```
+**Accuracy is 0.9645.**
+
+## Using the best model on the test set
+The highest accuracy is achieved with the random forests model (accuracy 0.9949). It is used on the final test data that was also cleaned up prior to the final predictions.
+
+```{r,cache=TRUE}
+subtest<-testing[,names(testing)[!(nearZeroVar(testing, saveMetrics = T)[, 4])]]
+remove2<-names(which(colSums(is.na(subtest))>0))
+subtest<-subtest[, !(names(subtest) %in% remove2)]
+## The first 6 columns are not useful for predicting
+subtest<-subtest[,7:58]
+predictions<-predict(modelfit,newdata=subtest)
+predictions
+```
+
